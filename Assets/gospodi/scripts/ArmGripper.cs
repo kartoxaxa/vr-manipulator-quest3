@@ -9,6 +9,9 @@ public class ArmGripper : MonoBehaviour
     [Header("Настройки")]
     public bool disableGravityWhileHeld = true;
 
+    [Tooltip("Если у объекта есть дочерний объект с таким именем, он будет совмещён с targetEnd (удобно для бутылки)")]
+    public string grabAnchorName = "GrabAnchor";
+
     private GameObject grabbedCube;
     private Rigidbody grabbedRb;
     private FixedJoint joint;
@@ -41,9 +44,21 @@ public class ArmGripper : MonoBehaviour
             marker.isTaken = true;
         }
 
-        // 1) Сначала строго ставим кубик в точку захвата
-        cube.transform.position = targetEnd.position;
-        cube.transform.rotation = targetEnd.rotation;
+        // 1) Ставим объект в точку захвата.
+        // Если есть GrabAnchor (например, горлышко бутылки) — совмещаем с targetEnd именно его,
+        // а не центр/начало модели.
+        Transform anchor = FindGrabAnchor(cube.transform);
+        if (anchor != null)
+        {
+            Quaternion deltaRot = targetEnd.rotation * Quaternion.Inverse(anchor.rotation);
+            cube.transform.rotation = deltaRot * cube.transform.rotation;
+            cube.transform.position += targetEnd.position - anchor.position;
+        }
+        else
+        {
+            cube.transform.position = targetEnd.position;
+            cube.transform.rotation = targetEnd.rotation;
+        }
 
         // 2) Готовим физику кубика
         if (grabbedRb != null)
@@ -87,5 +102,19 @@ public class ArmGripper : MonoBehaviour
 
         grabbedCube = null;
         grabbedRb = null;
+    }
+
+    private Transform FindGrabAnchor(Transform root)
+    {
+        if (root == null || string.IsNullOrEmpty(grabAnchorName)) return null;
+
+        Transform[] children = root.GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < children.Length; i++)
+        {
+            if (children[i] != root && children[i].name == grabAnchorName)
+                return children[i];
+        }
+
+        return null;
     }
 }

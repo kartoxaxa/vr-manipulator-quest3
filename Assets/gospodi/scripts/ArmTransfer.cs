@@ -43,6 +43,13 @@ public class ArmTransfer : MonoBehaviour
     public bool StartTransfer()
     {
         if (isRunning) return false;
+
+        if (BottlePourController.IsAnyPouring)
+        {
+            Debug.Log("ArmTransfer: сейчас идёт розлив воды, перенос кубиков не запускаю.");
+            return false;
+        }
+
         if (gripper == null || gripper.HasCube()) return false;
         if (conveyorQueue == null || !conveyorQueue.HasCube()) return false;
 
@@ -52,6 +59,12 @@ public class ArmTransfer : MonoBehaviour
 
     public void ResetTransfer()
     {
+        if (BottlePourController.IsAnyPouring)
+        {
+            Debug.Log("ArmTransfer: сейчас идёт розлив воды, сброс не выполняю.");
+            return;
+        }
+
         if (routine != null)
         {
             StopCoroutine(routine);
