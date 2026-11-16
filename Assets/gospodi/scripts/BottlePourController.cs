@@ -9,9 +9,9 @@ using UnityEngine.XR.Interaction.Toolkit.Interactables;
 /// Скрипт сам находит манипулятор, бутылку и стакан, сам готовит физику,
 /// якорь захвата, носик бутылки, воду и струю.
 /// Кнопка "Bottle" (XR Simple Interactable) подписывается на событие автоматически.
-/// Для теста на ПК — клавиша B.
+/// Для теста на ПК — клавиша Y (рядом с T — кубики).
 /// </summary>
-[DefaultExecutionOrder(10000)] // LateUpdate должен идти после ArmIKCCD, чтобы удерживать наклон бутылки
+[DefaultExecutionOrder(10000)] // LateUpdate должен идти после ArmIKCCD, чтобы поворачивать кисть POINT_7, а не бутылку
 public class BottlePourController : MonoBehaviour
 {
     [Header("Ссылки (можно оставить пустыми — найдёт сам)")]
@@ -19,6 +19,9 @@ public class BottlePourController : MonoBehaviour
     public Transform glass;
     public ArmGripper gripper;
     public ArmTransfer armTransfer;
+
+    [Tooltip("Кисть манипулятора POINT_7. Если пусто — возьмётся родитель TARGET_END.")]
+    public Transform wrist;
 
     [Header("Движение манипулятора")]
     [Tooltip("Скорость перемещения цели IK, м/с")]
@@ -77,6 +80,9 @@ public class BottlePourController : MonoBehaviour
     private Material streamMaterial;
     private Transform stream;
     private XRSimpleInteractable bottleButton;
+    private ArmIKCCD armIK;
+    private JointAxis wristJoint;
+    private int wristJointIndex = -1;
 
     private Vector3 bottleStartPos;
     private Quaternion bottleStartRot;
@@ -129,23 +135,86 @@ public class BottlePourController : MonoBehaviour
 
     private void Update()
     {
-        // Тест на ПК
-        if (Keyboard.current != null && Keyboard.current.bKey.wasPressedThisFrame)
+        // Тест на ПК: T — кубики, Y — розлив (клавиши рядом)
+        if (Keyboard.current != null && Keyboard.current.yKey.wasPressedThisFrame)
             OnBottleButtonPressed();
+
+        // Важно: кисть должна быть повёрнута до Solve() в ArmIKCCD (LateUpdate),
+        // иначе IK посчитает цель для старой ориентации кисти.
+        ApplyWristLock();
     }
 
     private void LateUpdate()
     {
-        // Держим ориентацию кисти после того, как ArmIKCCD повернул суставы
-        if (handRotationLocked && targetEnd != null)
-            targetEnd.rotation = heldRotation;
+        // Повторно фиксируем кисть после ArmIKCCD — на случай, если JointAxis успел её тронуть.
+        ApplyWristLock();
 
         if (pourVisualActive)
             UpdateStream();
     }
 
+    private void ApplyWristLock()
+    {
+        if (!handRotationLocked || targetEnd == null) return;
+
+        if (wrist != null)
+        {
+            // Держим TARGET_END/бутылку в нужной мировой ориентации, поворачивая
+            // именно кисть POINT_7. Формула работает и для непрямого родителя.
+            Quaternion rel = Quaternion.Inverse(wrist.rotation) * targetEnd.rotation;
+            wrist.rotation = heldRotation * Quaternion.Inverse(rel);
+        }
+        else
+        {
+            // Страховка, если POINT_7 не найден
+            targetEnd.rotation = heldRotation;
+        }
+    }
+
+    /// <summary>
+    /// На время розлива убираем POINT_7 из цепочки ArmIKCCD и останавливаем его JointAxis.
+    /// Тогда IK решает оставшиеся 6 суставов уже с нужной ориентацией кисти,
+    /// а не борется с ней. После розлива всё возвращается на место.
+    /// </summary>
+    private void SetWristIkLocked(bool locked)
+    {
+        if (armIK == null || wristJoint == null || armIK.joints == null) return;
+
+        if (locked)
+        {
+            if (wristJointIndex >= 0) return;
+
+            for (int i = 0; i < armIK.joints.Length; i++)
+            {
+                if (armIK.joints[i] != wristJoint) continue;
+
+                wristJointIndex = i;
+                armIK.joints[i] = null;
+                wristJoint.SnapToAngle(0f);
+                wristJoint.ManualInputEnabled = false;
+                break;
+            }
+        }
+        else
+        {
+            if (wristJointIndex < 0) return;
+
+            armIK.joints[wristJointIndex] = wristJoint;
+            wristJointIndex = -1;
+            wristJoint.ManualInputEnabled = true;
+        }
+    }
+
+    private void OnDisable()
+    {
+        // Если объект выключили/удалили прямо во время розлива — вернуть POINT_7 в IK.
+        SetWristIkLocked(false);
+    }
+
     private void OnDestroy()
     {
+        SetWristIkLocked(false);
+
         if (bottleCollider != null && glassCollider != null)
             Physics.IgnoreCollision(bottleCollider, glassCollider, false);
 
@@ -211,8 +280,24 @@ public class BottlePourController : MonoBehaviour
             if (ik != null) targetPoint = ik.target;
         }
 
+        if (armIK == null && armTransfer != null) armIK = armTransfer.armIK;
+        if (armIK == null) armIK = FindAnyObjectByType<ArmIKCCD>();
+
         if (gripper != null)
             targetEnd = gripper.targetEnd;
+
+        if (wrist == null && targetEnd != null)
+        {
+            wrist = targetEnd.parent;
+            if (wrist != null && wrist.name != "POINT_7")
+            {
+                Debug.LogWarning($"[BottlePour] Кисть — '{wrist.name}', а не POINT_7. " +
+                                 "Наклоняю родителя TARGET_END.");
+            }
+        }
+
+        if (wrist != null && wristJoint == null)
+            wristJoint = wrist.GetComponent<JointAxis>();
 
         if (bottle == null) bottle = FindModelRoot("Bottle");
         if (glass == null) glass = FindModelRoot("Glass");
@@ -400,7 +485,7 @@ public class BottlePourController : MonoBehaviour
 
         Debug.LogWarning("[BottlePour] Кнопка 'Bottle' с XR Simple Interactable не найдена. " +
                          "Переименуй кнопку в 'Bottle' или привяжи Select Entered -> Pour() вручную. " +
-                         "На ПК можно нажать B.");
+                         "На ПК можно нажать Y.");
     }
 
     // ------------------------------------------------------------------
@@ -425,9 +510,11 @@ public class BottlePourController : MonoBehaviour
             Vector3 anchorWorld = bottleAnchor.position;
             Vector3 approach = anchorWorld + Vector3.up * approachHeight;
 
-            // Держим кисть в ориентации бутылки, чтобы при захвате её не перекрутило
+            // Держим TARGET_END в ориентации бутылки, поворачивая кисть POINT_7:
+            // так бутылка не крутится в клешне, а наклоняется вместе с кистью.
             handRotationLocked = true;
             heldRotation = bottle.rotation;
+            SetWristIkLocked(true);
 
             // 1) Подъезд сверху и опускание к якорю
             yield return MoveTargetAndWait(approach, 2.5f, false);
@@ -567,6 +654,7 @@ public class BottlePourController : MonoBehaviour
                 Physics.IgnoreCollision(bottleCollider, glassCollider, false);
 
             handRotationLocked = false;
+            SetWristIkLocked(false);
             pourVisualActive = false;
             if (stream != null) stream.gameObject.SetActive(false);
 
