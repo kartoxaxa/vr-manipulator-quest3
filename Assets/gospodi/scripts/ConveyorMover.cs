@@ -42,7 +42,7 @@ public class ConveyorMover : MonoBehaviour
 
     private void OnTriggerEnter(Collider other)
     {
-        if (!other.CompareTag("Cube")) return;
+        if (!IsCube(other)) return;
 
         Rigidbody rb = other.attachedRigidbody;
         if (rb == null) rb = other.GetComponent<Rigidbody>();
@@ -54,13 +54,23 @@ public class ConveyorMover : MonoBehaviour
 
     private void OnTriggerExit(Collider other)
     {
-        if (!other.CompareTag("Cube")) return;
+        if (!IsCube(other)) return;
 
         Rigidbody rb = other.attachedRigidbody;
         if (rb == null) rb = other.GetComponent<Rigidbody>();
         if (rb == null) return;
 
         cubesOnBelt.Remove(rb);
+    }
+
+    // Кубик определяем по компоненту-маркеру, а не по тегу
+    private static bool IsCube(Collider other)
+    {
+        if (other == null) return false;
+        if (other.GetComponent<CubeMarker>() != null) return true;
+
+        Rigidbody rb = other.attachedRigidbody;
+        return rb != null && rb.GetComponent<CubeMarker>() != null;
     }
 
     private void OnDrawGizmos()

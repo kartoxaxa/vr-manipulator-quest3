@@ -40,13 +40,14 @@ public class ArmTransfer : MonoBehaviour
 
     public bool IsRunning => isRunning;
 
-    public void StartTransfer()
+    public bool StartTransfer()
     {
-        if (isRunning) return;
-        if (gripper == null || gripper.HasCube()) return;
-        if (conveyorQueue == null || !conveyorQueue.HasCube()) return;
+        if (isRunning) return false;
+        if (gripper == null || gripper.HasCube()) return false;
+        if (conveyorQueue == null || !conveyorQueue.HasCube()) return false;
 
         routine = StartCoroutine(TransferRoutine());
+        return true;
     }
 
     public void ResetTransfer()
@@ -61,6 +62,13 @@ public class ArmTransfer : MonoBehaviour
             gripper.Release();
 
         isRunning = false;
+
+        // Возвращаем цель манипулятора в исходную точку, чтобы цикл начался заново
+        if (targetPoint != null && homePoint != null)
+        {
+            targetPoint.position = homePoint.position;
+            targetPoint.rotation = homePoint.rotation;
+        }
     }
 
     private IEnumerator TransferRoutine()

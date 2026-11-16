@@ -1,4 +1,5 @@
 ﻿using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 public class CubeAutoSpawner : MonoBehaviour
@@ -22,6 +23,9 @@ public class CubeAutoSpawner : MonoBehaviour
 
     private bool hasSpawned = false;
     private Coroutine spawnCoroutine;
+
+    // Все кубики, созданные этим спавнером (для гарантированного удаления)
+    private readonly List<GameObject> spawnedCubes = new List<GameObject>();
 
     public void SpawnOnce()
     {
@@ -49,7 +53,37 @@ public class CubeAutoSpawner : MonoBehaviour
     public void ResetAndRespawn()
     {
         ResetSpawner();
+        DestroyAllSpawnedCubes();
         SpawnOnce();
+    }
+
+    /// <summary>
+    /// Удаляет все кубики, созданные спавнером, где бы они ни находились:
+    /// на ленте, в очереди, в захвате, в полёте или уже сброшенные.
+    /// </summary>
+    public void DestroyAllSpawnedCubes()
+    {
+        // 1) Находим все кубики по маркеру (включая те, чьи ссылки потерялись)
+        CubeMarker[] markers = FindObjectsByType<CubeMarker>(FindObjectsInactive.Include);
+        for (int i = 0; i < markers.Length; i++)
+        {
+            if (markers[i] != null)
+                Destroy(markers[i].gameObject);
+        }
+
+        // 2) Дополнительно удаляем всё, что запомнили при спавне
+        for (int i = 0; i < spawnedCubes.Count; i++)
+        {
+            if (spawnedCubes[i] != null)
+                Destroy(spawnedCubes[i]);
+        }
+        spawnedCubes.Clear();
+
+        // 3) Чистим списки ленты и очереди от ссылок на удалённые кубики
+        if (conveyorMover != null)
+            conveyorMover.Clear();
+        if (conveyorQueue != null)
+            conveyorQueue.Clear();
     }
 
     private IEnumerator SpawnRoutine()
@@ -61,6 +95,7 @@ public class CubeAutoSpawner : MonoBehaviour
             if (conveyorMover == null || conveyorQueue == null) yield break;
 
             // Чистим null из списков
+            spawnedCubes.RemoveAll(go => go == null);
             conveyorMover.cubesOnBelt.RemoveAll(rb => rb == null);
             conveyorQueue.queue.RemoveAll(go => go == null);
 
@@ -80,7 +115,11 @@ public class CubeAutoSpawner : MonoBehaviour
 
             GameObject cube = Instantiate(cubePrefab, spawnPoint.position, spawnPoint.rotation);
             cube.name = "Cube_" + spawnedCount;
-            cube.tag = "Cube";
+
+            // Маркер вместо тега: тег "Cube" может быть не определён в проекте
+            if (cube.GetComponent<CubeMarker>() == null)
+                cube.AddComponent<CubeMarker>();
+            spawnedCubes.Add(cube);
 
             Rigidbody rb = cube.GetComponent<Rigidbody>();
             if (rb == null) rb = cube.AddComponent<Rigidbody>();

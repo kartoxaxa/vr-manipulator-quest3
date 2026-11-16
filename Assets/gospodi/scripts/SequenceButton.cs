@@ -10,7 +10,7 @@ public class SequenceButton : MonoBehaviour
     public ConveyorMover conveyorMover;
 
     [Header("Поведение 3-го нажатия")]
-    [Tooltip("Удалить все кубики (с тегом Cube) и запустить спавн заново")]
+    [Tooltip("Удалить все кубики (где бы они ни находились) и запустить спавн заново")]
     public bool resetAndRespawnOnThirdPress = true;
 
     private int state = 0; // 0 - спавн, 1 - ожидание переноса, 2 - перенос запущен/завершён
@@ -58,9 +58,15 @@ public class SequenceButton : MonoBehaviour
 
             if (armTransfer != null)
             {
-                armTransfer.StartTransfer();
-                Debug.Log("SequenceButton: манипулятор начал перенос кубиков");
-                state = 2;
+                if (armTransfer.StartTransfer())
+                {
+                    Debug.Log("SequenceButton: манипулятор начал перенос кубиков");
+                    state = 2;
+                }
+                else
+                {
+                    Debug.Log("SequenceButton: перенос не запустился (манипулятор занят или кубик ещё не готов).");
+                }
             }
             else
             {
@@ -84,13 +90,23 @@ public class SequenceButton : MonoBehaviour
 
     private void ResetCycleAndRespawn()
     {
-        // 1) Остановить перенос и отпустить кубик (если держит)
+        // 1) Остановить перенос, отпустить кубик и вернуть манипулятор в исходную точку
         if (armTransfer != null)
         {
             armTransfer.ResetTransfer();
         }
 
-        // 2) Очистить очередь и ленту
+        // 2) Удалить все кубики, где бы они ни находились (лента, очередь, захват, пол)
+        if (spawner != null)
+        {
+            spawner.DestroyAllSpawnedCubes();
+        }
+        else
+        {
+            DestroyAllCubesFallback();
+        }
+
+        // 3) Очистить очередь и ленту от ссылок на удалённые кубики
         if (conveyorQueue != null)
         {
             conveyorQueue.Clear();
@@ -100,18 +116,11 @@ public class SequenceButton : MonoBehaviour
             conveyorMover.Clear();
         }
 
-        // 3) Удалить все кубики в сцене
-        GameObject[] cubes = GameObject.FindGameObjectsWithTag("Cube");
-        for (int i = 0; i < cubes.Length; i++)
-        {
-            if (cubes[i] != null)
-                Destroy(cubes[i]);
-        }
-
-        // 4) Сбросить спавнер и запустить заново
+        // 4) Сбросить спавнер и запустить спавн заново
         if (spawner != null)
         {
-            spawner.ResetAndRespawn();
+            spawner.ResetSpawner();
+            spawner.SpawnOnce();
             Debug.Log("SequenceButton: кубики удалены, спавн запущен заново.");
             state = 1; // ждём, пока кубики доедут до очереди, чтобы снова запустить перенос
         }
@@ -119,6 +128,17 @@ public class SequenceButton : MonoBehaviour
         {
             Debug.LogError("SequenceButton: CubeAutoSpawner не назначен, не могу перезапустить спавн.");
             state = 0;
+        }
+    }
+
+    // Резервный вариант, если спавнер не назначен
+    private void DestroyAllCubesFallback()
+    {
+        CubeMarker[] markers = FindObjectsByType<CubeMarker>(FindObjectsInactive.Include);
+        for (int i = 0; i < markers.Length; i++)
+        {
+            if (markers[i] != null)
+                Destroy(markers[i].gameObject);
         }
     }
 }
