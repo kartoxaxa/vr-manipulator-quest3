@@ -91,8 +91,13 @@ public class BottlePourController : MonoBehaviour
     private float bottleFill = 1f;
     private float glassFill;
     private bool isPouring;
-    private bool handRotationLocked;
-    private Quaternion heldRotation;
+    private bool wristTiltActive;
+    private Quaternion wristTiltBase;
+    private Vector3 wristTiltAxis = Vector3.right;
+    private float wristTiltAngle;
+    private Quaternion wristLocalAtLock;
+    private bool holdBottleUpright;
+    private Quaternion bottleUprightRotation;
     private bool pourVisualActive;
     private float lastPressTime = -10f;
 
@@ -139,42 +144,51 @@ public class BottlePourController : MonoBehaviour
         if (Keyboard.current != null && Keyboard.current.yKey.wasPressedThisFrame)
             OnBottleButtonPressed();
 
-        // Важно: кисть должна быть повёрнута до Solve() в ArmIKCCD (LateUpdate),
-        // иначе IK посчитает цель для старой ориентации кисти.
-        ApplyWristLock();
+        // Наклон задаём до Solve() в ArmIKCCD (LateUpdate), чтобы IK сразу
+        // решал оставшиеся суставы с уже повёрнутой кистью.
+        ApplyBottleUpright();
+        ApplyWristTilt();
     }
 
     private void LateUpdate()
     {
-        // Повторно фиксируем кисть после ArmIKCCD — на случай, если JointAxis успел её тронуть.
-        ApplyWristLock();
+        // Повторно применяем ориентацию после ArmIKCCD.
+        ApplyBottleUpright();
+        ApplyWristTilt();
 
         if (pourVisualActive)
             UpdateStream();
     }
 
-    private void ApplyWristLock()
+    /// <summary>
+    /// Пока бутылка едет к стакану, держим TARGET_END в её исходной вертикальной
+    /// ориентации, чтобы клешня не перекрутила бутылку. Кисть POINT_7 при этом
+    /// не трогаем — IK ведёт её естественно, как с кубиком.
+    /// </summary>
+    private void ApplyBottleUpright()
     {
-        if (!handRotationLocked || targetEnd == null) return;
+        if (!holdBottleUpright || targetEnd == null) return;
+        targetEnd.rotation = bottleUprightRotation;
+    }
 
-        if (wrist != null)
-        {
-            // Держим TARGET_END/бутылку в нужной мировой ориентации, поворачивая
-            // именно кисть POINT_7. Формула работает и для непрямого родителя.
-            Quaternion rel = Quaternion.Inverse(wrist.rotation) * targetEnd.rotation;
-            wrist.rotation = heldRotation * Quaternion.Inverse(rel);
-        }
-        else
-        {
-            // Страховка, если POINT_7 не найден
-            targetEnd.rotation = heldRotation;
-        }
+    private void ApplyWristTilt()
+    {
+        if (!wristTiltActive) return;
+
+        Transform tiltTarget = wrist != null ? wrist : targetEnd;
+        if (tiltTarget == null) return;
+
+        // Наклоняем кисть относительно её естественной ориентации при захвате,
+        // а не сбрасываем в мировую ориентацию бутылки. Бутылка жёстко висит
+        // на кисти и повторяет этот наклон, как кубик в захвате.
+        tiltTarget.rotation = Quaternion.AngleAxis(wristTiltAngle, wristTiltAxis) * wristTiltBase;
     }
 
     /// <summary>
-    /// На время розлива убираем POINT_7 из цепочки ArmIKCCD и останавливаем его JointAxis.
-    /// Тогда IK решает оставшиеся 6 суставов уже с нужной ориентацией кисти,
-    /// а не борется с ней. После розлива всё возвращается на место.
+    /// На время наклона убираем POINT_7 из цепочки ArmIKCCD и отключаем его JointAxis.
+    /// Угол сустава не сбрасываем: кисть продолжает движение от своей естественной
+    /// ориентации, а IK подстраивает оставшиеся 6 суставов под новую ориентацию.
+    /// После розлива всё возвращается на место.
     /// </summary>
     private void SetWristIkLocked(bool locked)
     {
@@ -190,7 +204,6 @@ public class BottlePourController : MonoBehaviour
 
                 wristJointIndex = i;
                 armIK.joints[i] = null;
-                wristJoint.SnapToAngle(0f);
                 wristJoint.ManualInputEnabled = false;
                 break;
             }
@@ -205,14 +218,28 @@ public class BottlePourController : MonoBehaviour
         }
     }
 
+    private void RestoreWristPose()
+    {
+        if (!wristTiltActive) return;
+
+        wristTiltActive = false;
+        Transform tiltTarget = wrist != null ? wrist : targetEnd;
+        if (tiltTarget != null)
+            tiltTarget.localRotation = wristLocalAtLock;
+    }
+
     private void OnDisable()
     {
         // Если объект выключили/удалили прямо во время розлива — вернуть POINT_7 в IK.
+        holdBottleUpright = false;
+        RestoreWristPose();
         SetWristIkLocked(false);
     }
 
     private void OnDestroy()
     {
+        holdBottleUpright = false;
+        RestoreWristPose();
         SetWristIkLocked(false);
 
         if (bottleCollider != null && glassCollider != null)
@@ -510,13 +537,13 @@ public class BottlePourController : MonoBehaviour
             Vector3 anchorWorld = bottleAnchor.position;
             Vector3 approach = anchorWorld + Vector3.up * approachHeight;
 
-            // Держим TARGET_END в ориентации бутылки, поворачивая кисть POINT_7:
-            // так бутылка не крутится в клешне, а наклоняется вместе с кистью.
-            handRotationLocked = true;
-            heldRotation = bottle.rotation;
-            SetWristIkLocked(true);
+            // Бутылку держим вертикально за TARGET_END, но кисть POINT_7 не фиксируем:
+            // IK ведёт её естественно, как с кубиком, без сброса вниз.
+            holdBottleUpright = true;
+            bottleUprightRotation = bottle.rotation;
 
-            // 1) Подъезд сверху и опускание к якорю
+            // 1) Подъезд сверху и опускание к якорю.
+            // Ориентацию кисти здесь не навязываем.
             yield return MoveTargetAndWait(approach, 2.5f, false);
             yield return MoveTargetAndWait(anchorWorld, armSettleTimeout, true);
 
@@ -541,6 +568,7 @@ public class BottlePourController : MonoBehaviour
             }
 
             handOffsetAtGrab = targetEnd.position - bottle.position;
+            Debug.Log("[BottlePour] Бутылка захвачена, начинаю перенос к стакану.");
 
             // Не даём бутылке толкать стакан во время наклона
             if (bottleCollider != null && glassCollider != null)
@@ -563,17 +591,37 @@ public class BottlePourController : MonoBehaviour
             yield return MoveTargetAndWait(new Vector3(glassBounds.center.x, handY, glassBounds.center.z), 3f, false);
             if (!StillHoldingBottle()) { Debug.LogWarning("[BottlePour] Захват бутылки прерван."); yield break; }
 
-            // 5) Наклон в сторону стакана
+            // 5) Наклон в сторону стакана.
+            // Бутылка уже висит на кисти так же, как кубик, и до этого момента
+            // удерживалась вертикально. Дальше наклоняем именно кисть POINT_7
+            // на относительный угол от её текущей (естественной) ориентации.
+            // В мировую ориентацию бутылки кисть не сбрасываем.
+            holdBottleUpright = false;
+
             Vector3 toGlass = glassCenter - bottle.position;
             toGlass.y = 0f;
             if (toGlass.sqrMagnitude < 0.0001f) toGlass = bottle.forward;
+            toGlass.Normalize();
 
-            Vector3 tiltAxis = Vector3.Cross(Vector3.up, toGlass.normalized);
-            if (tiltAxis.sqrMagnitude < 0.0001f) tiltAxis = bottle.right;
+            Vector3 bottleUp = bottle.up;
+            Vector3 tiltAxis = Vector3.Cross(bottleUp, toGlass);
+            if (tiltAxis.sqrMagnitude < 0.0001f) tiltAxis = Vector3.Cross(bottleUp, bottle.forward);
+            if (tiltAxis.sqrMagnitude < 0.0001f) tiltAxis = Vector3.right;
+            wristTiltAxis = tiltAxis.normalized;
 
-            Quaternion upright = bottle.rotation;
-            Quaternion tilted = Quaternion.AngleAxis(tiltAngle, tiltAxis.normalized) * upright;
-            yield return RotateHeld(upright, tilted, tiltDuration);
+            Transform tiltTarget = wrist != null ? wrist : targetEnd;
+            wristTiltBase = tiltTarget != null ? tiltTarget.rotation : Quaternion.identity;
+            wristLocalAtLock = tiltTarget != null ? tiltTarget.localRotation : Quaternion.identity;
+            wristTiltAngle = 0f;
+            wristTiltActive = true;
+
+            // Исключаем POINT_7 из IK, чтобы он не боролся с нашим наклоном.
+            // Оставшиеся 6 суставов сами подстраиваются под новую ориентацию кисти.
+            SetWristIkLocked(true);
+            Debug.Log($"[BottlePour] Наклоняю кисть {(wrist != null ? wrist.name : "TARGET_END")} " +
+                      $"на {tiltAngle:F0}° в сторону стакана.");
+
+            yield return RotateWristTilt(0f, tiltAngle, tiltDuration);
             if (!StillHoldingBottle()) { Debug.LogWarning("[BottlePour] Захват бутылки прерван."); yield break; }
 
             // 6) Точно подвести носик к стакану
@@ -619,8 +667,8 @@ public class BottlePourController : MonoBehaviour
                 if (stream != null) stream.gameObject.SetActive(false);
             }
 
-            // 8) Вернуть бутылку в вертикальное положение
-            yield return RotateHeld(tilted, upright, tiltDuration);
+            // 8) Вернуть кисть в исходный наклон (0°), бутылка снова смотрит как при захвате
+            yield return RotateWristTilt(tiltAngle, 0f, tiltDuration);
             if (!StillHoldingBottle()) { Debug.LogWarning("[BottlePour] Захват бутылки прерван."); yield break; }
 
             // 9) Вернуть бутылку на место
@@ -653,7 +701,12 @@ public class BottlePourController : MonoBehaviour
             if (bottleCollider != null && glassCollider != null)
                 Physics.IgnoreCollision(bottleCollider, glassCollider, false);
 
-            handRotationLocked = false;
+            // Возвращаем кисть в ту локальную позу, в которой она была при захвате,
+            // и только потом снова включаем POINT_7 в IK. Так JointAxis не сбрасывает
+            // кисть вниз и не прыгает на чужой угол.
+            RestoreWristPose();
+            holdBottleUpright = false;
+
             SetWristIkLocked(false);
             pourVisualActive = false;
             if (stream != null) stream.gameObject.SetActive(false);
@@ -707,18 +760,18 @@ public class BottlePourController : MonoBehaviour
         }
     }
 
-    private IEnumerator RotateHeld(Quaternion from, Quaternion to, float duration)
+    private IEnumerator RotateWristTilt(float from, float to, float duration)
     {
         float t = 0f;
         while (t < 1f)
         {
             t += Time.deltaTime / Mathf.Max(0.01f, duration);
             float k = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(t));
-            heldRotation = Quaternion.Slerp(from, to, k);
+            wristTiltAngle = Mathf.Lerp(from, to, k);
             yield return null;
         }
 
-        heldRotation = to;
+        wristTiltAngle = to;
     }
 
     private IEnumerator AlignSpoutOverGlass()
