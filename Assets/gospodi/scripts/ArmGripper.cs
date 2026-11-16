@@ -33,6 +33,14 @@ public class ArmGripper : MonoBehaviour
         grabbedCube = cube;
         grabbedRb = cube.GetComponent<Rigidbody>();
 
+        // Помечаем кубик как взятый: лента и очередь больше его не трогают
+        CubeMarker marker = cube.GetComponent<CubeMarker>();
+        if (marker != null)
+        {
+            marker.inQueue = false;
+            marker.isTaken = true;
+        }
+
         // 1) Сначала строго ставим кубик в точку захвата
         cube.transform.position = targetEnd.position;
         cube.transform.rotation = targetEnd.rotation;

@@ -42,7 +42,11 @@ public class ConveyorMover : MonoBehaviour
 
     private void OnTriggerEnter(Collider other)
     {
-        if (!IsCube(other)) return;
+        CubeMarker marker = GetMarker(other);
+        if (marker == null) return;
+
+        // Кубики в очереди и уже взятые манипулятором лента не трогает
+        if (marker.inQueue || marker.isTaken) return;
 
         Rigidbody rb = other.attachedRigidbody;
         if (rb == null) rb = other.GetComponent<Rigidbody>();
@@ -54,7 +58,7 @@ public class ConveyorMover : MonoBehaviour
 
     private void OnTriggerExit(Collider other)
     {
-        if (!IsCube(other)) return;
+        if (GetMarker(other) == null) return;
 
         Rigidbody rb = other.attachedRigidbody;
         if (rb == null) rb = other.GetComponent<Rigidbody>();
@@ -64,13 +68,15 @@ public class ConveyorMover : MonoBehaviour
     }
 
     // Кубик определяем по компоненту-маркеру, а не по тегу
-    private static bool IsCube(Collider other)
+    private static CubeMarker GetMarker(Collider other)
     {
-        if (other == null) return false;
-        if (other.GetComponent<CubeMarker>() != null) return true;
+        if (other == null) return null;
+
+        CubeMarker marker = other.GetComponent<CubeMarker>();
+        if (marker != null) return marker;
 
         Rigidbody rb = other.attachedRigidbody;
-        return rb != null && rb.GetComponent<CubeMarker>() != null;
+        return rb != null ? rb.GetComponent<CubeMarker>() : null;
     }
 
     private void OnDrawGizmos()

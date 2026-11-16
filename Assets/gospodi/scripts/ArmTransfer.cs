@@ -100,6 +100,13 @@ public class ArmTransfer : MonoBehaviour
             // 4) Захват кубика
             gripper.Grab(cube);
 
+            // Если захват не удался — не гоняем руку по маршруту впустую
+            if (!gripper.HasCube())
+            {
+                Debug.LogWarning("ArmTransfer: не удалось захватить кубик, перенос остановлен.");
+                break;
+            }
+
             // 5) Подъём над местом захвата
             if (approachPoint != null)
                 yield return MoveTo(approachPoint);

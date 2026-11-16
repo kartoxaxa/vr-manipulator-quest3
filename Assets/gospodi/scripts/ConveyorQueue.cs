@@ -47,6 +47,11 @@ public class ConveyorQueue : MonoBehaviour
             }
 
             GameObject cube = rb.gameObject;
+
+            // Кубик уже взят манипулятором — не возвращаем его в очередь
+            CubeMarker marker = cube.GetComponent<CubeMarker>();
+            if (marker != null && marker.isTaken) continue;
+
             if (queue.Contains(cube)) continue;
 
             // Если очередь пуста - первый кубик останавливается в stopPoint
@@ -63,6 +68,7 @@ public class ConveyorQueue : MonoBehaviour
                     cube.transform.position = stopPoint.position;
                     cube.transform.rotation = stopPoint.rotation;
 
+                    if (marker != null) marker.inQueue = true;
                     queue.Add(cube);
                     RebuildQueue();
                     continue;
@@ -82,6 +88,7 @@ public class ConveyorQueue : MonoBehaviour
                     rb.angularVelocity = Vector3.zero;
                     rb.isKinematic = true;
 
+                    if (marker != null) marker.inQueue = true;
                     queue.Add(cube);
                     RebuildQueue();
                     continue;
@@ -124,6 +131,25 @@ public class ConveyorQueue : MonoBehaviour
 
         GameObject first = queue[0];
         queue.RemoveAt(0);
+
+        // Помечаем кубик как взятый и убираем его с ленты,
+        // иначе очередь/лента могут снова его перехватить
+        if (first != null)
+        {
+            CubeMarker marker = first.GetComponent<CubeMarker>();
+            if (marker != null)
+            {
+                marker.inQueue = false;
+                marker.isTaken = true;
+            }
+
+            if (conveyorMover != null)
+            {
+                Rigidbody rb = first.GetComponent<Rigidbody>();
+                if (rb != null)
+                    conveyorMover.cubesOnBelt.Remove(rb);
+            }
+        }
 
         RebuildQueue();
         return first;
