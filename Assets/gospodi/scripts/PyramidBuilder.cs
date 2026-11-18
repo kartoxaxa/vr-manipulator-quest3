@@ -5,8 +5,9 @@ using UnityEngine.InputSystem;
 using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
 /// <summary>
-/// Собирает пирамиду 3-2-1 из кубиков, которые лежат в объекте More_cube.
+/// Собирает пирамиду 3-2-1 там, где лежат кубики из объекта More_cube.
 /// Кубики берутся по порядку (дочерние объекты More_cube).
+/// Если первые 3 кубика стоят в ряд, они используются как готовое основание.
 /// Тест на ПК — клавиша U. VR-кнопку можно привязать к OnPyramidButtonPressed()
 /// или назвать её Pyramid — тогда скрипт подпишется сам.
 /// </summary>
@@ -16,7 +17,7 @@ public class PyramidBuilder : MonoBehaviour
     [Tooltip("Пустой объект, внутри которого лежат 6 кубиков по порядку. Если пусто — ищется объект More_cube.")]
     public Transform cubesRoot;
 
-    [Tooltip("Точка на уровне стола, от которой строится пирамида. Если пусто — ищется PyramidOrigin, иначе DropPoint.")]
+    [Tooltip("Точка на уровне стола, от которой строится пирамида. Если пусто — ищется PyramidOrigin, иначе берётся место кубиков More_cube.")]
     public Transform pyramidOrigin;
 
     public ArmGripper gripper;
@@ -57,6 +58,9 @@ public class PyramidBuilder : MonoBehaviour
 
     [Tooltip("Небольшой зазор между кубиками, м")]
     public float cubeGap = 0.002f;
+
+    [Tooltip("Если первые 3 кубика стоят в ряд, использовать их как основание и достраивать только верх 2-1")]
+    public bool useFirstThreeAsBase = true;
 
     [Tooltip("Пауза перед включением физики после установки последнего кубика")]
     public float settleBeforePhysics = 0.3f;
@@ -171,14 +175,8 @@ public class PyramidBuilder : MonoBehaviour
             return;
         }
 
-        if (cubesRoot == null || pyramidOrigin == null)
+        if (cubesRoot == null)
             ResolveReferences();
-
-        if (pyramidOrigin == null)
-        {
-            Debug.LogError("[Pyramid] Не найдена точка основания. Создай Empty 'PyramidOrigin' на уровне стола.");
-            return;
-        }
 
         if (cubes.Count < 6)
             PrepareCubes();
@@ -186,6 +184,12 @@ public class PyramidBuilder : MonoBehaviour
         if (cubes.Count < 6)
         {
             Debug.LogError($"[Pyramid] Нужно 6 кубиков в More_cube, найдено {cubes.Count}.");
+            return;
+        }
+
+        if (!TryGetPyramidOrigin(out _, out _))
+        {
+            Debug.LogError("[Pyramid] Не найдена точка основания. Создай Empty 'PyramidOrigin' или заполни More_cube.");
             return;
         }
 
@@ -227,9 +231,6 @@ public class PyramidBuilder : MonoBehaviour
 
         if (pyramidOrigin == null)
             pyramidOrigin = FindTransformByName("PyramidOrigin");
-
-        if (pyramidOrigin == null && armTransfer != null)
-            pyramidOrigin = armTransfer.dropPoint;
     }
 
     private void PrepareCubes()
@@ -329,11 +330,51 @@ public class PyramidBuilder : MonoBehaviour
         try
         {
             float cubeSize = GetCubeSize(cubes[0]);
-            Vector3[] slots = BuildSlotPositions(cubeSize);
-            Quaternion slotRotation = pyramidOrigin != null ? pyramidOrigin.rotation : Quaternion.identity;
+            Vector3[] slots;
+            Quaternion slotRotation;
+            int startSlotIndex = 0;
             List<Rigidbody> placedBodies = new List<Rigidbody>();
 
-            for (int slotIndex = 0; slotIndex < 6; slotIndex++)
+            // Если первые 3 кубика уже стоят в ряд — это готовое основание.
+            // Тогда манипулятору остаётся достроить верх 2-1, и пирамида получается
+            // ровно там, где лежат кубики.
+            if (useFirstThreeAsBase && TryBuildSlotsFromExistingBase(cubeSize, out slots, out slotRotation))
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    Transform baseCube = cubes[i];
+                    if (baseCube == null) continue;
+
+                    Rigidbody rb = baseCube.GetComponent<Rigidbody>();
+                    if (rb != null)
+                    {
+                        rb.linearVelocity = Vector3.zero;
+                        rb.angularVelocity = Vector3.zero;
+                        rb.isKinematic = true;
+                        rb.useGravity = false;
+                    }
+
+                    baseCube.SetPositionAndRotation(slots[i], slotRotation);
+                    placedCubes.Add(baseCube);
+                    if (rb != null) placedBodies.Add(rb);
+                }
+
+                startSlotIndex = 3;
+                Debug.Log("[Pyramid] Первые 3 кубика используются как основание, достраиваю верх 2-1.");
+            }
+            else
+            {
+                if (!TryGetPyramidOrigin(out Vector3 origin, out Quaternion originRotation))
+                {
+                    Debug.LogError("[Pyramid] Не найдена точка основания для пирамиды.");
+                    yield break;
+                }
+
+                slots = BuildSlotPositions(cubeSize, origin, originRotation);
+                slotRotation = originRotation;
+            }
+
+            for (int slotIndex = startSlotIndex; slotIndex < 6; slotIndex++)
             {
                 Transform cube = TakeNextFreeCube();
                 if (cube == null)
@@ -462,11 +503,116 @@ public class PyramidBuilder : MonoBehaviour
         return grab != null && grab.isSelected;
     }
 
-    private Vector3[] BuildSlotPositions(float cubeSize)
+    private bool TryBuildSlotsFromExistingBase(float cubeSize, out Vector3[] slots, out Quaternion rotation)
     {
-        Vector3 origin = pyramidOrigin != null ? pyramidOrigin.position : Vector3.zero;
-        Quaternion rotation = pyramidOrigin != null ? pyramidOrigin.rotation : Quaternion.identity;
+        slots = null;
+        rotation = Quaternion.identity;
 
+        if (cubes.Count < 6) return false;
+        if (cubes[0] == null || cubes[1] == null || cubes[2] == null) return false;
+        if (IsHeldByPlayer(cubes[0]) || IsHeldByPlayer(cubes[1]) || IsHeldByPlayer(cubes[2])) return false;
+
+        Vector3 a = cubes[0].position;
+        Vector3 b = cubes[1].position;
+        Vector3 c = cubes[2].position;
+
+        Vector3 ab = b - a;
+        Vector3 bc = c - b;
+        ab.y = 0f;
+        bc.y = 0f;
+
+        if (ab.sqrMagnitude < 0.0001f || bc.sqrMagnitude < 0.0001f) return false;
+
+        // Первые три должны стоять примерно на одной высоте, в линию и с шагом,
+        // близким к размеру кубика. Тогда это готовое основание 3x1.
+        float heightTolerance = cubeSize * 0.5f;
+        if (Mathf.Abs(a.y - b.y) > heightTolerance) return false;
+        if (Mathf.Abs(b.y - c.y) > heightTolerance) return false;
+
+        if (Vector3.Dot(ab.normalized, bc.normalized) < 0.9f) return false;
+
+        float spacingTolerance = cubeSize * 0.75f;
+        if (Mathf.Abs(ab.magnitude - cubeSize) > spacingTolerance) return false;
+        if (Mathf.Abs(bc.magnitude - cubeSize) > spacingTolerance) return false;
+
+        Vector3 up = Vector3.up * cubeSize;
+        slots = new Vector3[6];
+        slots[0] = a;
+        slots[1] = b;
+        slots[2] = c;
+        slots[3] = (a + b) * 0.5f + up;
+        slots[4] = (b + c) * 0.5f + up;
+        slots[5] = (slots[3] + slots[4]) * 0.5f + up;
+
+        rotation = Quaternion.Euler(0f, cubes[0].eulerAngles.y, 0f);
+        return true;
+    }
+
+    private bool TryGetPyramidOrigin(out Vector3 position, out Quaternion rotation)
+    {
+        if (pyramidOrigin != null)
+        {
+            position = pyramidOrigin.position;
+            rotation = pyramidOrigin.rotation;
+            return true;
+        }
+
+        // По умолчанию строим там, где лежат кубики: по центру их области,
+        // на уровне нижней грани (поверхности стола).
+        if (cubes.Count > 0 && TryGetCubesBounds(out Bounds bounds))
+        {
+            position = new Vector3(bounds.center.x, bounds.min.y, bounds.center.z);
+            rotation = cubesRoot != null
+                ? Quaternion.Euler(0f, cubesRoot.eulerAngles.y, 0f)
+                : Quaternion.identity;
+            return true;
+        }
+
+        if (cubesRoot != null)
+        {
+            position = cubesRoot.position;
+            rotation = Quaternion.Euler(0f, cubesRoot.eulerAngles.y, 0f);
+            return true;
+        }
+
+        if (armTransfer != null && armTransfer.dropPoint != null)
+        {
+            position = armTransfer.dropPoint.position;
+            rotation = armTransfer.dropPoint.rotation;
+            return true;
+        }
+
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+        return false;
+    }
+
+    private bool TryGetCubesBounds(out Bounds bounds)
+    {
+        bool hasBounds = false;
+        bounds = new Bounds();
+
+        for (int i = 0; i < cubes.Count; i++)
+        {
+            if (cubes[i] == null) continue;
+            if (!TryGetWorldBounds(cubes[i], out Bounds cubeBounds)) continue;
+
+            if (!hasBounds)
+            {
+                bounds = cubeBounds;
+                hasBounds = true;
+            }
+            else
+            {
+                bounds.Encapsulate(cubeBounds);
+            }
+        }
+
+        return hasBounds;
+    }
+
+    private Vector3[] BuildSlotPositions(float cubeSize, Vector3 origin, Quaternion rotation)
+    {
         float step = cubeSize + cubeGap;
         Vector3[] local = new Vector3[6];
 
