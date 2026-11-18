@@ -269,6 +269,12 @@ public class BottlePourController : MonoBehaviour
             return;
         }
 
+        if (PyramidBuilder.IsAnyBuilding)
+        {
+            Debug.Log("[BottlePour] Сейчас идёт сборка пирамиды.");
+            return;
+        }
+
         if (armTransfer != null && armTransfer.IsRunning)
         {
             Debug.Log("[BottlePour] Манипулятор занят переносом кубиков.");

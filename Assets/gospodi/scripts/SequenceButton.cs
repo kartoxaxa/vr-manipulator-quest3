@@ -27,6 +27,12 @@ public class SequenceButton : MonoBehaviour
     // Привяжи этот метод в XR Simple Interactable -> Activate Events -> Activated
     public void OnPoke()
     {
+        if (PyramidBuilder.IsAnyBuilding)
+        {
+            Debug.Log("SequenceButton: сейчас идёт сборка пирамиды.");
+            return;
+        }
+
         if (state == 0)
         {
             if (spawner != null)

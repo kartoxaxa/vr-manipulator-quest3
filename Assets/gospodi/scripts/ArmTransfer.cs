@@ -44,6 +44,12 @@ public class ArmTransfer : MonoBehaviour
     {
         if (isRunning) return false;
 
+        if (PyramidBuilder.IsAnyBuilding)
+        {
+            Debug.Log("ArmTransfer: сейчас идёт сборка пирамиды, перенос кубиков не запускаю.");
+            return false;
+        }
+
         if (BottlePourController.IsAnyPouring)
         {
             Debug.Log("ArmTransfer: сейчас идёт розлив воды, перенос кубиков не запускаю.");
@@ -59,6 +65,12 @@ public class ArmTransfer : MonoBehaviour
 
     public void ResetTransfer()
     {
+        if (PyramidBuilder.IsAnyBuilding)
+        {
+            Debug.Log("ArmTransfer: сейчас идёт сборка пирамиды, сброс не выполняю.");
+            return;
+        }
+
         if (BottlePourController.IsAnyPouring)
         {
             Debug.Log("ArmTransfer: сейчас идёт розлив воды, сброс не выполняю.");
