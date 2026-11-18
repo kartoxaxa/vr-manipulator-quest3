@@ -8,6 +8,7 @@ using UnityEngine.XR.Interaction.Toolkit.Interactables;
 /// Собирает пирамиду 3-2-1 там, где лежат кубики из объекта More_cube.
 /// Кубики берутся по порядку (дочерние объекты More_cube).
 /// Если первые 3 кубика стоят в ряд, они используются как готовое основание.
+/// Перед захватом рука поднимается в верхнюю точку PyramidUpPoint, чтобы не проходить сквозь стол.
 /// Тест на ПК — клавиша U. VR-кнопку можно привязать к OnPyramidButtonPressed()
 /// или назвать её Pyramid — тогда скрипт подпишется сам.
 /// </summary>
@@ -20,6 +21,9 @@ public class PyramidBuilder : MonoBehaviour
     [Tooltip("Точка на уровне стола, от которой строится пирамида. Если пусто — ищется PyramidOrigin, иначе берётся место кубиков More_cube.")]
     public Transform pyramidOrigin;
 
+    [Tooltip("Точка над кубиками для безопасного прохода руки. Если пусто — ищется PyramidUpPoint/UpPoint, иначе создаётся над кубиками.")]
+    public Transform abovePoint;
+
     public ArmGripper gripper;
     public ArmTransfer armTransfer;
     public ArmIKCCD armIK;
@@ -28,14 +32,14 @@ public class PyramidBuilder : MonoBehaviour
     [Tooltip("Скорость перемещения цели IK, м/с")]
     public float moveSpeed = 0.4f;
 
-    [Tooltip("Насколько высоко подойти к кубику перед захватом")]
-    public float approachHeight = 0.12f;
+    [Tooltip("Высота безопасной верхней точки над кубиками, м")]
+    public float aboveHeight = 1.0f;
 
-    [Tooltip("Насколько поднять кубик после захвата")]
-    public float liftHeight = 0.18f;
+    [Tooltip("Насколько высоко подойти к кубику перед захватом, м")]
+    public float pickApproachHeight = 0.8f;
 
-    [Tooltip("Насколько поднять руку после установки кубика")]
-    public float retractHeight = 0.12f;
+    [Tooltip("Насколько высоко подойти к слоту перед установкой, м")]
+    public float placeApproachHeight = 0.6f;
 
     [Tooltip("Пауза перед захватом, сек")]
     public float grabDelay = 0.15f;
@@ -231,6 +235,15 @@ public class PyramidBuilder : MonoBehaviour
 
         if (pyramidOrigin == null)
             pyramidOrigin = FindTransformByName("PyramidOrigin");
+
+        if (abovePoint == null)
+            abovePoint = FindTransformByName("PyramidUpPoint");
+
+        if (abovePoint == null && cubesRoot != null)
+        {
+            Transform child = cubesRoot.Find("UpPoint");
+            if (child != null) abovePoint = child;
+        }
     }
 
     private void PrepareCubes()
@@ -374,6 +387,8 @@ public class PyramidBuilder : MonoBehaviour
                 slotRotation = originRotation;
             }
 
+            Transform highPoint = EnsureAbovePoint();
+
             for (int slotIndex = startSlotIndex; slotIndex < 6; slotIndex++)
             {
                 Transform cube = TakeNextFreeCube();
@@ -385,8 +400,13 @@ public class PyramidBuilder : MonoBehaviour
 
                 Vector3 cubePosition = cube.position;
 
-                // 1) Подход сверху и опускание к кубику
-                yield return MoveTargetAndWait(cubePosition + Vector3.up * approachHeight, 2.5f, false);
+                // 1) Уходим в безопасную верхнюю точку над кубиками,
+                // чтобы рука не шла низом и не проходила сквозь стол.
+                if (highPoint != null)
+                    yield return MoveTargetAndWait(highPoint.position, 3f, false);
+
+                // 2) Подход сверху к кубику и опускание
+                yield return MoveTargetAndWait(cubePosition + Vector3.up * pickApproachHeight, 3f, false);
                 yield return MoveTargetAndWait(cubePosition, armSettleTimeout, true);
 
                 float grabError = targetEnd != null
@@ -402,7 +422,7 @@ public class PyramidBuilder : MonoBehaviour
 
                 yield return new WaitForSeconds(grabDelay);
 
-                // 2) Захват
+                // 3) Захват
                 gripper.Grab(cube.gameObject);
                 grabbed = gripper.HasCube();
                 if (!grabbed)
@@ -411,19 +431,22 @@ public class PyramidBuilder : MonoBehaviour
                     yield break;
                 }
 
-                // 3) Поднять кубик
-                yield return MoveTargetAndWait(targetPoint.position + Vector3.up * liftHeight, 2f, false);
+                // 4) Поднять кубик высоко над столом и уйти в верхнюю точку
+                yield return MoveTargetAndWait(cubePosition + Vector3.up * pickApproachHeight, 3f, false);
 
-                // 4) Подойти сверху к слоту и опустить
+                if (highPoint != null)
+                    yield return MoveTargetAndWait(highPoint.position, 3f, false);
+
+                // 5) Подойти сверху к слоту и опустить
                 int layer = slotIndex < 3 ? 0 : (slotIndex < 5 ? 1 : 2);
-                Vector3 aboveSlot = slots[slotIndex] + Vector3.up * (approachHeight + cubeSize * layer);
+                Vector3 aboveSlot = slots[slotIndex] + Vector3.up * (placeApproachHeight + cubeSize * layer);
 
                 yield return MoveTargetAndWait(aboveSlot, 3f, false);
                 yield return MoveTargetAndWait(slots[slotIndex], 3f, false);
 
                 yield return new WaitForSeconds(releaseDelay);
 
-                // 5) Отпустить и зафиксировать в слоте
+                // 6) Отпустить и зафиксировать в слоте
                 gripper.Release();
                 grabbed = false;
 
@@ -440,8 +463,11 @@ public class PyramidBuilder : MonoBehaviour
                 placedCubes.Add(cube);
                 if (rb != null) placedBodies.Add(rb);
 
-                // 6) Убрать руку вверх, чтобы не задеть поставленный кубик
-                yield return MoveTargetAndWait(targetPoint.position + Vector3.up * retractHeight, 2f, false);
+                // 7) Поднять руку обратно в верхнюю точку, чтобы не задеть пирамиду
+                yield return MoveTargetAndWait(aboveSlot, 3f, false);
+                if (highPoint != null)
+                    yield return MoveTargetAndWait(highPoint.position, 3f, false);
+
                 yield return new WaitForSeconds(0.1f);
             }
 
@@ -609,6 +635,30 @@ public class PyramidBuilder : MonoBehaviour
         }
 
         return hasBounds;
+    }
+
+    private Transform EnsureAbovePoint()
+    {
+        if (abovePoint != null) return abovePoint;
+
+        if (TryGetCubesBounds(out Bounds bounds))
+        {
+            GameObject go = new GameObject("PyramidUpPoint");
+            go.transform.position = new Vector3(bounds.center.x, bounds.max.y + aboveHeight, bounds.center.z);
+            abovePoint = go.transform;
+            Debug.Log("[Pyramid] Создана верхняя точка над кубиками.");
+            return abovePoint;
+        }
+
+        if (cubesRoot != null)
+        {
+            GameObject go = new GameObject("PyramidUpPoint");
+            go.transform.position = cubesRoot.position + Vector3.up * aboveHeight;
+            abovePoint = go.transform;
+            return abovePoint;
+        }
+
+        return null;
     }
 
     private Vector3[] BuildSlotPositions(float cubeSize, Vector3 origin, Quaternion rotation)
