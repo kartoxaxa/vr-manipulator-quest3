@@ -343,6 +343,17 @@ public class PyramidBuilder : MonoBehaviour
         bool grabbed = false;
         bool completed = false;
 
+        // Запоминаем состояние ограничения высоты IK и включаем его на время сборки.
+        bool previousConstraint = false;
+        float previousFloorY = 0f;
+        int previousExemptJoints = 2;
+        if (armIK != null)
+        {
+            previousConstraint = armIK.constrainAboveHeight;
+            previousFloorY = armIK.minJointY;
+            previousExemptJoints = armIK.baseJointsToExempt;
+        }
+
         try
         {
             float cubeSize = GetCubeSize(cubes[0]);
@@ -391,6 +402,11 @@ public class PyramidBuilder : MonoBehaviour
             }
 
             Transform highPoint = EnsureAbovePoint();
+
+            // Запрещаем IK опускать звенья ниже уровня кубиков — именно это и заставляло
+            // руку проходить сквозь стол при попытке дотянуться до кубиков.
+            if (armIK != null && TryGetCubesBounds(out Bounds cubeBounds))
+                armIK.SetHeightConstraint(true, cubeBounds.max.y, 2);
 
             for (int slotIndex = startSlotIndex; slotIndex < 6; slotIndex++)
             {
@@ -511,6 +527,9 @@ public class PyramidBuilder : MonoBehaviour
 
             if (!completed && targetPoint != null && homePoint != null)
                 targetPoint.position = homePoint.position;
+
+            if (armIK != null)
+                armIK.SetHeightConstraint(previousConstraint, previousFloorY, previousExemptJoints);
 
             isBuilding = false;
             IsAnyBuilding = false;

@@ -33,6 +33,19 @@ public class ArmIKCCD : MonoBehaviour
     public bool solveInEditMode = true;
     public bool solveInPlayMode = true;
 
+    [Header("Защита от прохода сквозь стол")]
+    [Tooltip("Включить проверку: суставы выше опорной плоскости не должны опускаться ниже неё")]
+    public bool constrainAboveHeight = false;
+
+    [Tooltip("Минимальная мировая высота для суставов (обычно уровень верха кубиков)")]
+    public float minJointY = 1.05f;
+
+    [Tooltip("Сколько нижних суставов колонны можно не проверять (они проходят через отверстие в столе)")]
+    public int baseJointsToExempt = 2;
+
+    [Tooltip("Дополнительный запас над опорной плоскостью, м")]
+    public float obstacleClearance = 0.02f;
+
     [Header("Отладка")]
     [SerializeField] private float tipError;
 
@@ -98,6 +111,35 @@ public class ArmIKCCD : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Включить ограничение высоты для суставов манипулятора.
+    /// Вызывается, например, перед сборкой пирамиды, чтобы рука не проваливалась сквозь стол.
+    /// </summary>
+    public void SetHeightConstraint(bool enabled, float floorY, int exemptBaseJoints = 2)
+    {
+        constrainAboveHeight = enabled;
+        if (enabled) minJointY = floorY;
+        baseJointsToExempt = Mathf.Max(0, exemptBaseJoints);
+    }
+
+    private bool PoseIsAboveTable()
+    {
+        if (!constrainAboveHeight) return true;
+
+        float limit = minJointY + obstacleClearance;
+
+        for (int i = baseJointsToExempt; i < joints.Length; i++)
+        {
+            JointAxis joint = joints[i];
+            if (joint == null) continue;
+            if (joint.transform.position.y < limit) return false;
+        }
+
+        if (tip != null && tip.position.y < limit) return false;
+
+        return true;
+    }
+
     private void Solve()
     {
         int count = joints.Length;
@@ -134,7 +176,16 @@ public class ArmIKCCD : MonoBehaviour
 
                 delta = Mathf.Clamp(delta, -maxDeltaPerIteration, maxDeltaPerIteration);
 
-                joint.SnapToAngle(joint.CurrentAngle + delta);
+                float previousAngle = joint.CurrentAngle;
+                joint.SnapToAngle(previousAngle + delta);
+
+                // Если новый поворот уводит какое-либо звено под стол — отменяем его.
+                // CCD подберёт другой поворот остальными суставами.
+                if (!PoseIsAboveTable())
+                {
+                    joint.SnapToAngle(previousAngle);
+                    continue;
+                }
             }
         }
 
