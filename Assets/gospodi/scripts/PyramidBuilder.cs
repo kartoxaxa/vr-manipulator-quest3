@@ -41,6 +41,9 @@ public class PyramidBuilder : MonoBehaviour
     [Tooltip("Насколько высоко подойти к слоту перед установкой, м")]
     public float placeApproachHeight = 0.6f;
 
+    [Tooltip("Насколько выше верхней грани кубика брать его, чтобы рука не опускалась к столу, м")]
+    public float grabClearance = 0.15f;
+
     [Tooltip("Пауза перед захватом, сек")]
     public float grabDelay = 0.15f;
 
@@ -399,18 +402,21 @@ public class PyramidBuilder : MonoBehaviour
                 }
 
                 Vector3 cubePosition = cube.position;
+                float cubeTopY = cubePosition.y + cubeSize * 0.5f;
 
-                // 1) Уходим в безопасную верхнюю точку над кубиками,
-                // чтобы рука не шла низом и не проходила сквозь стол.
+                // Точка захвата — НАД верхней гранью кубика.
+                // Рука больше не опускается к центру кубика на поверхности стола.
+                Vector3 grabPoint = new Vector3(cubePosition.x, cubeTopY + grabClearance, cubePosition.z);
+
+                // 1) Уходим в безопасную верхнюю точку.
                 if (highPoint != null)
                     yield return MoveTargetAndWait(highPoint.position, 3f, false);
 
-                // 2) Подход сверху к кубику и опускание
-                yield return MoveTargetAndWait(cubePosition + Vector3.up * pickApproachHeight, 3f, false);
-                yield return MoveTargetAndWait(cubePosition, armSettleTimeout, true);
+                // 2) Подходим к точке захвата над кубиком. Вниз до стола не идём.
+                yield return MoveTargetAndWait(grabPoint, armSettleTimeout, true);
 
                 float grabError = targetEnd != null
-                    ? Vector3.Distance(targetEnd.position, cubePosition)
+                    ? Vector3.Distance(targetEnd.position, grabPoint)
                     : 999f;
 
                 if (grabError > grabTolerance)
@@ -422,7 +428,7 @@ public class PyramidBuilder : MonoBehaviour
 
                 yield return new WaitForSeconds(grabDelay);
 
-                // 3) Захват
+                // 3) Захват. Кубик прилипает к захвату над столом и больше не требует спуска.
                 gripper.Grab(cube.gameObject);
                 grabbed = gripper.HasCube();
                 if (!grabbed)
@@ -431,18 +437,21 @@ public class PyramidBuilder : MonoBehaviour
                     yield break;
                 }
 
-                // 4) Поднять кубик высоко над столом и уйти в верхнюю точку
-                yield return MoveTargetAndWait(cubePosition + Vector3.up * pickApproachHeight, 3f, false);
+                // 4) Поднять кубик и уйти в верхнюю точку
+                yield return MoveTargetAndWait(grabPoint + Vector3.up * pickApproachHeight, 3f, false);
 
                 if (highPoint != null)
                     yield return MoveTargetAndWait(highPoint.position, 3f, false);
 
-                // 5) Подойти сверху к слоту и опустить
+                // 5) Подойти к точке отпускания НАД слотом и отпустить кубик.
+                // Сам кубик потом принудительно встаёт в слот кодом ниже.
                 int layer = slotIndex < 3 ? 0 : (slotIndex < 5 ? 1 : 2);
-                Vector3 aboveSlot = slots[slotIndex] + Vector3.up * (placeApproachHeight + cubeSize * layer);
+                Vector3 releasePoint = new Vector3(
+                    slots[slotIndex].x,
+                    slots[slotIndex].y + cubeSize * 0.5f + grabClearance,
+                    slots[slotIndex].z);
 
-                yield return MoveTargetAndWait(aboveSlot, 3f, false);
-                yield return MoveTargetAndWait(slots[slotIndex], 3f, false);
+                yield return MoveTargetAndWait(releasePoint, 3f, false);
 
                 yield return new WaitForSeconds(releaseDelay);
 
@@ -464,7 +473,7 @@ public class PyramidBuilder : MonoBehaviour
                 if (rb != null) placedBodies.Add(rb);
 
                 // 7) Поднять руку обратно в верхнюю точку, чтобы не задеть пирамиду
-                yield return MoveTargetAndWait(aboveSlot, 3f, false);
+                yield return MoveTargetAndWait(releasePoint + Vector3.up * pickApproachHeight, 3f, false);
                 if (highPoint != null)
                     yield return MoveTargetAndWait(highPoint.position, 3f, false);
 
