@@ -347,11 +347,19 @@ public class PyramidBuilder : MonoBehaviour
         bool previousConstraint = false;
         float previousFloorY = 0f;
         int previousExemptJoints = 2;
+        int previousIterations = 15;
+        float previousMaxDelta = 10f;
+        float previousSpeed = 30f;
+        float previousSmoothing = 0.35f;
         if (armIK != null)
         {
             previousConstraint = armIK.constrainAboveHeight;
             previousFloorY = armIK.minJointY;
             previousExemptJoints = armIK.baseJointsToExempt;
+            previousIterations = armIK.iterations;
+            previousMaxDelta = armIK.maxDeltaPerIteration;
+            previousSpeed = armIK.ikRotationSpeed;
+            previousSmoothing = armIK.solvedAngleSmoothing;
         }
 
         try
@@ -405,8 +413,18 @@ public class PyramidBuilder : MonoBehaviour
 
             // Запрещаем IK опускать звенья ниже уровня кубиков — именно это и заставляло
             // руку проходить сквозь стол при попытке дотянуться до кубиков.
-            if (armIK != null && TryGetCubesBounds(out Bounds cubeBounds))
-                armIK.SetHeightConstraint(true, cubeBounds.max.y, 2);
+            if (armIK != null)
+            {
+                if (TryGetCubesBounds(out Bounds cubeBounds))
+                    armIK.SetHeightConstraint(true, cubeBounds.max.y, 2);
+
+                // В сцене стоит всего 2 итерации CCD — из-за этого рука дёргается
+                // и не доходит до цели. На время сборки включаем устойчивый режим.
+                armIK.iterations = Mathf.Max(armIK.iterations, 12);
+                armIK.maxDeltaPerIteration = Mathf.Max(armIK.maxDeltaPerIteration, 4f);
+                armIK.ikRotationSpeed = Mathf.Max(armIK.ikRotationSpeed, 25f);
+                armIK.solvedAngleSmoothing = 0.35f;
+            }
 
             for (int slotIndex = startSlotIndex; slotIndex < 6; slotIndex++)
             {
@@ -529,7 +547,13 @@ public class PyramidBuilder : MonoBehaviour
                 targetPoint.position = homePoint.position;
 
             if (armIK != null)
+            {
                 armIK.SetHeightConstraint(previousConstraint, previousFloorY, previousExemptJoints);
+                armIK.iterations = previousIterations;
+                armIK.maxDeltaPerIteration = previousMaxDelta;
+                armIK.ikRotationSpeed = previousSpeed;
+                armIK.solvedAngleSmoothing = previousSmoothing;
+            }
 
             isBuilding = false;
             IsAnyBuilding = false;

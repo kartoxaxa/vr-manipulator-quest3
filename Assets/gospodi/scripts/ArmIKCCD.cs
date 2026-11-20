@@ -29,6 +29,10 @@ public class ArmIKCCD : MonoBehaviour
     [Range(10f, 60f)]
     public float ikRotationSpeed = 30f;
 
+    [Tooltip("Насколько плавно обновлять целевую позу IK. Меньше — мягче, но с большей задержкой")]
+    [Range(0.05f, 1f)]
+    public float solvedAngleSmoothing = 0.35f;
+
     [Header("Режим")]
     public bool solveInEditMode = true;
     public bool solveInPlayMode = true;
@@ -177,22 +181,37 @@ public class ArmIKCCD : MonoBehaviour
                 delta = Mathf.Clamp(delta, -maxDeltaPerIteration, maxDeltaPerIteration);
 
                 float previousAngle = joint.CurrentAngle;
-                joint.SnapToAngle(previousAngle + delta);
+                float bestAngle = previousAngle;
 
-                // Если новый поворот уводит какое-либо звено под стол — отменяем его.
-                // CCD подберёт другой поворот остальными суставами.
-                if (!PoseIsAboveTable())
+                // Подбираем максимально безопасный поворот. Если полный шаг уводит звено
+                // под стол, пробуем меньшие шаги — так ограничение не вызывает рывков.
+                float[] fractions = { 1f, 0.5f, 0.25f, 0.125f };
+                for (int f = 0; f < fractions.Length; f++)
                 {
-                    joint.SnapToAngle(previousAngle);
-                    continue;
+                    joint.SnapToAngle(previousAngle + delta * fractions[f]);
+                    if (PoseIsAboveTable())
+                    {
+                        bestAngle = joint.CurrentAngle;
+                        break;
+                    }
                 }
+
+                joint.SnapToAngle(bestAngle);
+                if (Mathf.Abs(bestAngle - previousAngle) < 1e-4f) continue;
             }
         }
 
         for (int i = 0; i < count; i++)
         {
-            if (joints[i] != null)
-                _anglesSolved[i] = joints[i].CurrentAngle;
+            JointAxis joint = joints[i];
+            if (joint == null) continue;
+
+            // Сглаживание целевой позы убирает дёрганье, когда CCD за одну итерацию
+            // находит заметно другой вариант решения.
+            _anglesSolved[i] = Mathf.Lerp(
+                joint.TargetAngle,
+                joint.CurrentAngle,
+                Mathf.Clamp01(solvedAngleSmoothing));
         }
 
         for (int i = 0; i < count; i++)

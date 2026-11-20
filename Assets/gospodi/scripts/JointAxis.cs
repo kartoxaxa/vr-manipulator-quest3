@@ -27,6 +27,7 @@ public class JointAxis : MonoBehaviour
     private Quaternion _restLocalRotation;
 
     public float CurrentAngle => currentAngle;
+    public float TargetAngle => targetAngle;
     public Axis AxisType => rotationAxis;
     public Vector3 LocalAxis => GetAxisVector(rotationAxis);
     public Vector3 WorldAxis => transform.TransformDirection(LocalAxis);
